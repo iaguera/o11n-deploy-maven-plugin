@@ -2,8 +2,11 @@
 
 A Maven plug-in that helps you develop Java plug-ins for VMware vRealize Orchestrator by automatically installing the compiled *.vmoapp or *.dar files on the configured vRealize Orchestrator server.
 
-**Note: due to the lack of a API endpoint to restart the orchestration service you will still have to restart it manually e.g. using *service vco-server restart*.** You may further automate the deployment by executing a *SSH* command to do the job once the build was successfull.
-
+#### New in version 0.2.0
+- Added Orchestrator service restart option
+- Added better permission control
+- Maven debug mode will now provide verbose output
+- Replaced *Unirest* with *Jersey 2.0* and *JSON-P*
 
 ## Install
 You may download this Mojo as a binary and add it to your local Maven repository for usage. In addition this Mojo is available in the public OSSRH repository hosted by Sonatype and will automatically be pulled from there when added to your project's Maven POM.
@@ -29,25 +32,28 @@ If you have not yet added the Sonatype OSSRH you can do so by adding the followi
 This Mojo should be configured within your *o11nplugin-**pluginname**/pom.xml* Maven module. It has a single goal **deployplugin** and usually you should run it in the **install** phase. The **deployplugin** goal has the following parameters:
 
 - **o11nServer**: VMware Orchestrator server hostname or IP-address. **Required**.
-- **o11nPort**: VMware Orchestrator server REST API port. Defaults to *8281*.
-- **o11nUser**: User with sufficient permissions to import plugins. **Required**.
-- **o11nPassword**: Password for the provided user. **Required**.
-- **o11nOverwrite**: Set 'true' if you want to overwrite the plugin in case it already exists. Defaults to *true*.
-- **o11nPluginType**: Either 'vmoapp' or 'dar' depending on the plug-in format. Defaults to *vmoapp*.
-- **o11nPluginFilePath**: Path to the plugin *.vmoapp or *.dar that should be installed. Defaults to *${project.build.directory}*.
-- **o11nPluginFileName**: Filename without file extension of the plugin that should be installed. Defaults to *${project.build.finalName}*.
+- **o11nServicePort**: VMware Orchestrator Plugin Service REST API Port. Defaults to *8281*.
+- **o11nConfigPort**: VMware Orchestrator Config Service REST API Port. Defaults to *8283*.
+- **o11nPluginServiceUser**: Username of a user with sufficient permissions to import vRO plug-ins. **Required**. *Note: when using vRO integrated LDAP this will be 'vcoadmin' and 'root' has no permissions to use the plug-in service API by default.*
+- **o11nPluginServicePassword**: Password of the provided *o11nPluginServiceUser*. **Required**.
+- **o11nConfigServiceUser**: Username of a user with sufficient permissions to restart vRO services. **Required if *o11nRestartService* was set to *true***. *Note: when using vRO integrated LDAP this will be 'root' and 'vcoadmin' has no permissions to use the config service API by default.*
+- **o11nConfigServicePassword**: Password of the provided *o11nConfigServiceUser*. **Required if *o11nRestartService* was set to *true***.
+- **o11nOverwrite**: Forces vRO to reinstall the plug-in. Defaults to *true*.
+- **o11nPluginType**: The vRO plug-in format. Might be *dar* or *vmoapp*. Defaults to *dar*.
+- **o11nPluginFilePath**: Path to the plug-in file that should be installed. Defaults to *${project.build.directory}*. The filename will be taken from the configured *o11nPluginFileName*.
+- **o11nPluginFileName**: The plug-in filename of the plug-in that should be installed omitting any file extension. Defaults to *${project.build.finalName}*. The extension will be taken from the configured *o11nPluginType*.
 
 All parameters are provided as Strings and converted into the required format internally. A simple `mvn install` will then trigger the upload of the compiled plugin.
 
 
 ### Example configuration
-A example that uses all currently available parameters.
+A example that uses all currently available parameters. Note that for illustration purpose we also configured the optional parameters which would use the documented default values if omitted.
 
 ```xml
 <plugin>
 	<groupId>com.github.m451</groupId>
 	<artifactId>o11n-deploy-maven-plugin</artifactId>
-	<version>0.1.2</version>
+	<version>0.2.0</version>
 	<executions>
 		<execution>
 			<phase>install</phase>
@@ -57,14 +63,18 @@ A example that uses all currently available parameters.
 		</execution>
 	</executions>
 	<configuration>
-		<o11nServer>localhost</o11nServer>
-		<o11nPort>8281</o11nPort>
-		<o11nUser>vcoadmin</o11nUser>
-		<o11nPassword>vcoadmin</o11nPassword>
-		<o11nOverwrite>true</o11nOverwrite>
-		<o11nPluginType>vmoapp</o11nPluginType>
-		<o11nPluginFilePath>${project.build.directory}</o11nPluginFilePath>
-		<o11nPluginFileName>${project.build.finalName}</o11nPluginFileName>
+      <o11nServer>localhost</o11nServer>
+      <o11nServicePort>8281</o11nServicePort>
+      <o11nConfigPort>8283</o11nConfigPort>
+      <o11nPluginServiceUser>vcoadmin</o11nPluginServiceUser>
+      <o11nPluginServicePassword>vcoadmin</o11nPluginServicePassword>
+      <o11nConfigServiceUser>root</o11nConfigServiceUser>
+      <o11nConfigServicePassword>YourRootP$$word</o11nConfigServicePassword>
+      <o11nPluginType>vmoapp</o11nPluginType>
+      <o11nOverwrite>true</o11nOverwrite>
+      <o11nRestartService>true</o11nRestartService>
+      <o11nPluginFilePath>${project.build.directory}<o11nPluginFilePath>
+      <o11nPluginFileName>${project.build.finalName}</o11nPluginFileName>
 	</configuration>
 </plugin>
 <!-- Optional, see 'install' section of this readme -->
@@ -87,12 +97,19 @@ A example that uses all currently available parameters.
  
  An example output of a successfull run may look like this:
 ```bash
-[INFO] --- o11n-deploy-maven-plugin:0.1.1:deployplugin (default) @ o11nplugin-coopto ---
-[INFO] Configured plugin: 'D:\workspace\coopto\o11nplugin-coopto\target\o11nplugin-coopto-0.0.3-dev.vmoapp'.
-[INFO] Configured server: 'https://localhost:8281/vco/api/plugins'.
-[INFO] HTTP 204. Successfully updated plug-in in VMware Orchestrator!
+...
+[INFO] --- o11n-deploy-maven-plugin:0.2.0:deployplugin (default) @ o11nplugin-coopto ---
+[INFO] Starting Plug-in upload...
+[INFO] Configured plug-in path: 'D:\workspace\coopto\o11nplugin-coopto\target\o11nplugin-coopto-0.0.3-dev.vmoapp'.
+[INFO] Configured plug-in service URL: 'https://localhost:8281'.
+[INFO] Finished Plug-in upload.
+[INFO] Service restart was requested.
+[INFO] Restarting vRO service...
+[INFO] Configured config service URL: 'https://localhost:8283'.
+[INFO] Finished vRO service restart.
+[INFO] Successfully updated plug-in in VMware Orchestrator.
+...
 ```
-
 
 ## Licensing & Legal
 O11n-deploy-maven-plugin – from now on “this project”, “this program” or “this software” – is an open source project.
