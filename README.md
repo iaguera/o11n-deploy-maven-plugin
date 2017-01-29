@@ -12,6 +12,10 @@ A Maven plug-in that helps you develop Java plug-ins for VMware vRealize Orchest
 - Added option to delete plug-in packages (thanks @gvart)
 - Minor formatting and spelling fixes
 
+#### New in version 0.2.2
+- Minor Javadoc fixes
+- Added option to wait for pending configuration changes
+
 ## Install
 You may download this Mojo as a binary and add it to your local Maven repository for usage. In addition this Mojo is available in the public OSSRH repository hosted by Sonatype and will automatically be pulled from there when added to your project's Maven POM.
 If you have not yet added the Sonatype OSSRH you can do so by adding the following to your POM.
@@ -47,6 +51,7 @@ This Mojo should be configured within your *o11nplugin-**pluginname**/pom.xml* M
 - **o11nConfigServicePassword**: Password of the provided `o11nConfigServiceUser`. **Required if `o11nRestartService` was set to `true`**.
 - **o11nDeletePackage**: If set to `true` this option will delete all of the plug-ins packages before installing the new plug-in. *Note*: any changes done to the plug-in workflows and not synced with the packages in the plug-in bundle will be lost! The Orchestrator API option `deletePackageKeepingShared` is used internally for safety.
 - **o11nPackageName**: The package name of the plug-in package to be deleted. **Required if `o11nDeletePackage` was set to `true`**. *Note*: this is the package name as specified in the `pkg-name` attribute of the `dunes-meta-inf.xml` file. If the package is not found on the server the goal execution will continue but a warning will be logged.
+- **o11nWaitForPendingChanges**: If set to `true` this option will make this Mojo wait up to 240 seconds till the pending configuration changes have been applied. Note*: this option will only be processed if `o11nRestartService` is set to `true`.
 - **o11nPluginFilePath**: Path to the plug-in file that should be installed. Defaults to `${project.build.directory}`. The filename will be taken from the configured *o11nPluginFileName*.
 - **o11nPluginFileName**: The plug-in filename of the plug-in that should be installed omitting any file extension. Defaults to `${project.build.finalName}`. The extension will be taken from the configured *o11nPluginType*.
 
@@ -60,7 +65,7 @@ A example that uses all currently available parameters. Note that for illustrati
 <plugin>
     <groupId>com.github.m451</groupId>
     <artifactId>o11n-deploy-maven-plugin</artifactId>
-    <version>0.2.1</version>
+    <version>0.2.2</version>
     <executions>
         <execution>
             <phase>install</phase>
@@ -80,6 +85,7 @@ A example that uses all currently available parameters. Note that for illustrati
       <o11nPluginType>VMOAPP</o11nPluginType>
       <o11nOverwrite>true</o11nOverwrite>
       <o11nRestartService>true</o11nRestartService>
+      <o11nWaitForPendingChanges>true</o11nWaitForPendingChanges>
       <o11nDeletePackage>true</o11nDeletePackage>
       <o11nPackageName>com.example.packagename</o11nPackageName>
       <o11nPluginFilePath>${project.build.directory}<o11nPluginFilePath>
@@ -111,6 +117,12 @@ An example output of a successfull run may look like this:
 [INFO] Finished plug-in upload.
 [INFO] Service restart was requested.
 [INFO] Restarting Orchestrator service...
+[INFO] Wait for pending changes was requested.
+[INFO] Configuration changes are still pending. Waiting...
+[INFO] Configuration changes are still pending. Waiting...
+[INFO] Configuration changes are still pending. Waiting...
+[INFO] Configuration changes are still pending. Waiting...
+[INFO] Pending configuration changes have been applied. All done.
 [INFO] Finished Orchestrator service restart.
 [INFO] Successfully updated plug-in in VMware Orchestrator.
 ...

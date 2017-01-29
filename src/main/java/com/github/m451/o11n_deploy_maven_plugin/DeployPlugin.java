@@ -28,6 +28,9 @@ import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.util.HashMap;
+import java.util.Map;
+
 import javax.json.JsonObject;
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
@@ -86,11 +89,13 @@ public class DeployPlugin extends AbstractMojo
     @Parameter(defaultValue = "8281", property = "deployplugin.pluginserviceport", required = false)
     /**
      * VMware Orchestrator Plugin Service REST API Port, usually 8281.
+     * API documents at https://localhost:8281/vco/api/docs/.
      */
     private Integer o11nServicePort;
     @Parameter(defaultValue = "8283", property = "deployplugin.configserviceport", required = false)
     /**
      * VMware Orchestrator Config Service REST API Port, usually 8283.
+     * API documents at https://localhost:8283/vco-controlcenter/api/api-docs/.
      */
     private Integer o11nConfigPort;
     @Parameter(defaultValue = "vcoadmin", property = "deployplugin.pluginserviceuser", required = true)
@@ -153,20 +158,31 @@ public class DeployPlugin extends AbstractMojo
      * <b>Note</b>: any changes done to the plug-in workflows and not synced with the packages in the plug-in bundle will be lost!
      */
     private boolean o11nDeletePackage;
+    @Parameter(property = "deployplugin.packagename", required = false)
     /**
      * The package name of the plug-in package to be deleted if <code>o11nDeletePackage</code> is set to <code>true</code>.
      * <b>Note</b>: this is the package name as specified in the <code>pkg-name</code> attribute of the <tt>dunes-meta-inf.xml</tt> file.
      * If the package is not found on the server the goal execution will continue but a warning will be logged.
      */
-    @Parameter(property = "deployplugin.packagename", required = false)
     private String o11nPackageName;
+    @Parameter(defaultValue = "false", property = "deployplugin.waitforpendingchanges", required = false)
+    /**
+     * If set to <code>true</code> this option will make this Mojo wait up to 240 seconds till the pending configuration changes have been applied.
+     * <b>Note</b>: this option will only be processed if <code>o11nRestartService</code> is set to <code>true</code>.
+     */
+    private boolean o11nWaitForPendingChanges;
+    
 
     private static File file = null;
     private enum ServiceStatus
     {
         RUNNING, STOPPED, RESTARTING, UNDEFINED;
     }
-
+    private enum ConfigSlot
+    {
+        ACTIVE, PENDING;
+    }
+    
     public void execute() throws MojoExecutionException, MojoFailureException
     {
         // Force set all non-required parameters in case user accidently set them null
@@ -182,7 +198,7 @@ public class DeployPlugin extends AbstractMojo
         }
         if (o11nPluginType == null)
         {
-            // may be dar or vmoapp
+            // may be DAR or VMOAPP
             o11nPluginType = PluginType.DAR;
         }
         if (o11nServicePort == null || o11nServicePort < 1 || o11nServicePort > 65535)
@@ -193,6 +209,13 @@ public class DeployPlugin extends AbstractMojo
         {
             o11nConfigPort = 8283;
         }
+        if(o11nWaitForPendingChanges && !o11nRestartService)
+        {
+            // Only if o11nRestartService was set to true it makes sense to wait for configuration changes
+            // o11nRestartService checks will make sure the required credentials for o11nWaitForConfigChange are set.
+            o11nWaitForPendingChanges = false;
+        }
+        
         if(o11nRestartService)
         {
             if(o11nConfigServiceUser == null || o11nConfigServiceUser.isEmpty())
@@ -242,44 +265,94 @@ public class DeployPlugin extends AbstractMojo
 
                 if (o11nRestartService)
                 {
+                    
+                    // Wait a few seconds for config changes to be committed
+                    try
+                    {
+                        Thread.sleep(3000);
+                    } catch (InterruptedException e)
+                    {
+                        StringWriter sw = new StringWriter();
+                        PrintWriter pw = new PrintWriter(sw, true);
+                        e.printStackTrace(pw);
+                        throw new MojoExecutionException("Error while executing 'O11N-DEPLOY-MAVEN-PLUGIN':\n" + sw.getBuffer().toString());
+                    }
+
                     // 3. Restart service
                     getLog().info("Service restart was requested.");
                     Boolean restartTriggered = restartService();
 
                     if (restartTriggered)
                     {
-                        try
+                        // Wait for service restart
+                        for(int i=1; i<=12; i++)
                         {
-                            Thread.sleep(1000);
-                        } catch (InterruptedException e)
-                        {
-                            StringWriter sw = new StringWriter();
-                            PrintWriter pw = new PrintWriter(sw, true);
-                            e.printStackTrace(pw);
-                            throw new MojoExecutionException("Error while executing 'O11N-DEPLOY-MAVEN-PLUGIN':\n" + sw.getBuffer().toString());
+                            if(getServiceStatus() == ServiceStatus.RESTARTING)
+                            {
+                                if(i<12)
+                                {
+                                    try
+                                    {
+                                        Thread.sleep(5000);
+                                    } catch (InterruptedException e)
+                                    {
+                                        StringWriter sw = new StringWriter();
+                                        PrintWriter pw = new PrintWriter(sw, true);
+                                        e.printStackTrace(pw);
+                                        throw new MojoExecutionException("Error while executing 'O11N-DEPLOY-MAVEN-PLUGIN':\n" + sw.getBuffer().toString());
+                                    }
+                                }
+                                else
+                                {
+                                    getLog().warn("Timeout. Orchestrator service is not responding. Please verify your Orchestrator configuration.");
+                                    break;
+                                }
+                            }
                         }
 
-                        // 4. Wait for service restart
-                        int timeout = 12;
-                        int counter = 0;
-                        while (getServiceStatus() == ServiceStatus.RESTARTING)
+                        // 4. Check if the configuration was applied
+                        if(o11nWaitForPendingChanges)
                         {
-                            if (counter >= timeout)
-                            {
-                                getLog().warn("Timeout. Orchestrator service is not responding. Please verify your Orchestrator configuration.");
-                                break;
-                            }
-                            counter++;
 
-                            try
+                            getLog().info("Wait for pending changes was requested.");
+                            // Wait for pending changes to be applied
+                            for(int i=1; i<=24; i++)
                             {
-                                Thread.sleep(5000);
-                            } catch (InterruptedException e)
-                            {
-                                StringWriter sw = new StringWriter();
-                                PrintWriter pw = new PrintWriter(sw, true);
-                                e.printStackTrace(pw);
-                                throw new MojoExecutionException("Error while executing 'O11N-DEPLOY-MAVEN-PLUGIN':\n" + sw.getBuffer().toString());
+                                Map<ConfigSlot, String> configs = getConfigFingerprint();
+                                if(configs != null)
+                                {
+                                    if(configs.get(ConfigSlot.ACTIVE).equalsIgnoreCase(configs.get(ConfigSlot.PENDING)))
+                                    {
+                                        getLog().info("Pending configuration changes have been applied. All done.");
+                                        break;
+                                    }
+                                    else
+                                    {
+                                        if(i < 48)
+                                        {
+                                            getLog().info("Configuration changes are still pending. Waiting...");
+                                            try
+                                            {
+                                                Thread.sleep(5000);
+                                            } catch (InterruptedException e)
+                                            {
+                                                StringWriter sw = new StringWriter();
+                                                PrintWriter pw = new PrintWriter(sw, true);
+                                                e.printStackTrace(pw);
+                                                throw new MojoExecutionException("Error while executing 'O11N-DEPLOY-MAVEN-PLUGIN':\n" + sw.getBuffer().toString());
+                                            }
+                                        }
+                                        else
+                                        {
+                                            getLog().warn("Timeout. Orchestrator configuration was not applied. Please verify your Orchestrator configuration.");
+                                            break;
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    throw new MojoFailureException("An error occured while waiting for the configuration changes to be applied. Please verify your Orchestrator configuration.");
+                                }
                             }
                         }
 
@@ -566,11 +639,10 @@ public class DeployPlugin extends AbstractMojo
                 {
                 case 200:
                 case 201:
-                case 204:
                     // Don't use JsonObject.getString since the returned currentStatus might be null
                     // Rather use JsonObject.get which will return the value or JsonValue.NULL if it's null
                     // In addition JsonObject.isNull(String key) can be used for testing the retun value
-                    getLog().debug("Orchestrator service status: " + statusResponse.get("currentStatus"));
+                    getLog().debug("Orchestrator service status: '" + statusResponse.get("currentStatus") + "'.");
                     getLog().debug("Triggered Orchestrator service restart.");
                     return true;
                 case 401:
@@ -656,12 +728,10 @@ public class DeployPlugin extends AbstractMojo
                 switch (statusCode)
                 {
                 case 200:
-                case 201:
-                case 204:
                     // Don't use JsonObject.getString since the returned currentStatus might be null
                     // Rather use JsonObject.get which will return the value or JsonValue.NULL if it's null
                     // In addition JsonObject.isNull(String key) can be used for testing the retun value
-                    getLog().debug("Orchestrator service status: " + statusResponse.get("currentStatus"));
+                    getLog().debug("Orchestrator service status: '" + statusResponse.get("currentStatus") + "'.");
 
                     // Status should be "RUNNING", "STOPPED", "UNDEFINED" or NULL
                     if (statusResponse.isNull("currentStatus"))
@@ -704,6 +774,110 @@ public class DeployPlugin extends AbstractMojo
                 PrintWriter pw = new PrintWriter(sw, true);
                 ex.printStackTrace(pw);
                 throw new MojoFailureException("A ProcessingException occured while requesting Orchestrator service status:\n" + sw.getBuffer().toString());
+            } finally
+            {
+                // release resources
+                if (response != null)
+                {
+                    response.close();
+                }
+            }
+        } catch (Exception e)
+        {
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw, true);
+            e.printStackTrace(pw);
+            throw new MojoExecutionException("Unable to create HTTP client. Exception:\n" + sw.getBuffer().toString());
+        } finally
+        {
+            // release resources
+            if (configServiceClient != null)
+            {
+                configServiceClient.close();
+            }
+        }
+    }
+
+    // Returns the current Orchestrator configuration fingerprint
+    private Map<ConfigSlot,String> getConfigFingerprint() throws MojoFailureException, MojoExecutionException
+    {
+        // Example: https://localhost:8283
+        URI configServiceBaseUri = UriBuilder.fromUri("https://" + o11nServer + ":" + o11nConfigPort.toString()).build();
+        HttpAuthenticationFeature configServiceAuth = HttpAuthenticationFeature.basic(o11nConfigServiceUser, o11nConfigServicePassword);
+
+        return getConfigFingerprint(configServiceBaseUri, configServiceAuth);
+    }
+
+    private Map<ConfigSlot,String> getConfigFingerprint(URI apiEndpoint, HttpAuthenticationFeature auth) throws MojoFailureException, MojoExecutionException
+    {
+        getLog().debug("Getting Orchestrator configuration fingerprint...");
+        getLog().debug("Configured config service URL: '" + apiEndpoint.toString() + "'.");
+
+        Client configServiceClient = null;
+        Response response = null;
+
+        try
+        {
+            configServiceClient = getUnsecureClient();
+            configServiceClient.register(auth);
+
+            try
+            {
+                response = configServiceClient.target(apiEndpoint).path("/vco-controlcenter/api/server/config-version").request(MediaType.APPLICATION_JSON_TYPE).get();
+                JsonObject statusResponse = response.readEntity(JsonObject.class);
+
+                int statusCode = response.getStatus();
+                switch (statusCode)
+                {
+                case 200:
+                    // Don't use JsonObject.getString since the returned currentStatus might be null
+                    // Rather use JsonObject.get which will return the value or JsonValue.NULL if it's null
+                    // In addition JsonObject.isNull(String key) can be used for testing the retun value
+                    if (!statusResponse.isNull("activeConfigurationFingerprint") && !statusResponse.isNull("pendingConfigurationFingerprint"))
+                    {
+                        String activeFingerprint = statusResponse.getString("activeConfigurationFingerprint");
+                        String pendingFingerprint = statusResponse.getString("pendingConfigurationFingerprint");
+
+                        getLog().debug("Orchestrator active configuration fingerprint: '" + activeFingerprint + "'.");
+                        getLog().debug("Orchestrator pending configuration fingerprint: '" + pendingFingerprint + "'.");
+                        
+                        Map <ConfigSlot, String> map = new HashMap<ConfigSlot, String>();
+                        map.put(ConfigSlot.ACTIVE, activeFingerprint);
+                        map.put(ConfigSlot.PENDING, pendingFingerprint);
+                        return map;
+                    }
+                    else
+                    {
+                        getLog().warn("Error while reading configuration fingerprints. Unable to parse JSON data or fingerprints returned null.");
+                        return null;
+                    }
+                case 401:
+                    getLog().warn("HTTP 401. Authentication is required to get the configuration fingerprint.");
+                    return null;
+                case 403:
+                    getLog().warn("HTTP 403. The provided user is not authorized to get the configuration fingerprint.");
+                    return null;
+                case 404:
+                    getLog().warn("HTTP 404. The requested resource was not found. Make sure you entered the correct VMware Orchestrator URL and that VMware Orchestrator is reachable under that URL from the machine running this Maven Mojo.");
+                    return null;
+                default:
+                    getLog().warn("Unknown status code HTTP " + statusCode + " returned from VMware Orchestrator. Please verify if the configuration changes have been applied. I really got no clue.");
+                    return null;
+                }
+            } catch (ResponseProcessingException ex)
+            {
+                // Thrown in case processing of a received HTTP response fails
+                StringWriter sw = new StringWriter();
+                PrintWriter pw = new PrintWriter(sw, true);
+                ex.printStackTrace(pw);
+                throw new MojoFailureException("A ResponseProcessingException occured while requesting Orchestrator configuration fingerprint:\n" + sw.getBuffer().toString());
+            } catch (ProcessingException ex)
+            {
+                // Thrown in case the request processing or subsequent I/O operation fail.
+                StringWriter sw = new StringWriter();
+                PrintWriter pw = new PrintWriter(sw, true);
+                ex.printStackTrace(pw);
+                throw new MojoFailureException("A ProcessingException occured while requesting Orchestrator configuration fingerprint:\n" + sw.getBuffer().toString());
             } finally
             {
                 // release resources
