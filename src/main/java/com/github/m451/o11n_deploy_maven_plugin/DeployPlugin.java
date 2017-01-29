@@ -67,6 +67,12 @@ import org.glassfish.jersey.media.multipart.file.FileDataBodyPart;
 @Mojo(name = "deployplugin", defaultPhase = LifecyclePhase.INSTALL)
 public class DeployPlugin extends AbstractMojo
 {
+    // Public ENUM for o11nPluginType
+    public enum PluginType
+    {
+        VMOAPP, DAR;
+    }
+    
     // Taken from Maven API through PluginParameterExpressionEvaluator
     @Parameter(defaultValue = "${project}", readonly = true)
     private MavenProject project;
@@ -89,8 +95,8 @@ public class DeployPlugin extends AbstractMojo
     private Integer o11nConfigPort;
     @Parameter(defaultValue = "vcoadmin", property = "deployplugin.pluginserviceuser", required = true)
     /**
-     * Username of a user with sufficient permissions to import vRO plug-ins.
-     * <b>Note:</b> when using vRO integrated LDAP this will be 'vcoadmin' and 'root' has no permissions to use the plug-in service API by default.
+     * Username of a user with sufficient permissions to import Orchestrator plug-ins.
+     * <b>Note:</b> when using integrated LDAP this will be 'vcoadmin' and 'root' has no permissions to use the plug-in service API by default.
      * 
      */
     private String o11nPluginServiceUser;
@@ -102,8 +108,8 @@ public class DeployPlugin extends AbstractMojo
 
     @Parameter(defaultValue = "root", property = "deployplugin.configserviceuser", required = false)
     /**
-     * Username of a user with sufficient permissions to restart vRO services.
-     * <b>Note</b>: when using vRO integrated LDAP this will be 'root' and 'vcoadmin' has no permissions to use the config service API by default.
+     * Username of a user with sufficient permissions to restart the Orchestrator service.
+     * <b>Note</b>: when using integrated LDAP this will be 'root' and 'vcoadmin' has no permissions to use the config service API by default.
      */
     private String o11nConfigServiceUser;
     @Parameter(property = "deployplugin.configservicepassword", required = false)
@@ -125,25 +131,38 @@ public class DeployPlugin extends AbstractMojo
      * The extension will be taken from the configured <code>o11nPluginType</code>.
      */
     private String o11nPluginFileName;
-    @Parameter(defaultValue = "vmoapp", property = "deployplugin.plugintype", required = false)
+    @Parameter(defaultValue = "DAR", property = "deployplugin.plugintype", required = false)
     /**
-     * The vRO plug-in format. Might be <tt>dar</tt> or <tt>vmoapp</tt>.
+     * The Orchestrator plug-in bundle format. Might be <tt>DAR</tt> or <tt>VMOAPP</tt>.
      */
-    private String o11nPluginType;
+    private PluginType o11nPluginType;
     @Parameter(defaultValue = "true", property = "deployplugin.overwrite", required = false)
     /**
-     * Forces vRO to reinstall the plug-in.
+     * If set to <code>true</code> this option will force Orchestrator to reinstall the plug-in.
+     * <b>Note</b>: the value for this parameter is case-sensitive!
      */
     private boolean o11nOverwrite;
     @Parameter(defaultValue = "false", property = "deployplugin.restart", required = false)
     /**
-     * Triggers a vRO service restart after the plug-in was installed if set to <code>true</code>.
+     * If set to <code>true</code> this option will trigger a Orchestrator service restart after the plug-in was installed.
      */
     private boolean o11nRestartService;
+    @Parameter(defaultValue = "false", property = "deployplugin.deletepackage", required = false)
+    /**
+     * If set to <code>true</code> this option will delete all of the plug-ins packages before installing the new plug-in.
+     * <b>Note</b>: any changes done to the plug-in workflows and not synced with the packages in the plug-in bundle will be lost!
+     */
+    private boolean o11nDeletePackage;
+    /**
+     * The package name of the plug-in package to be deleted if <code>o11nDeletePackage</code> is set to <code>true</code>.
+     * <b>Note</b>: this is the package name as specified in the <code>pkg-name</code> attribute of the <tt>dunes-meta-inf.xml</tt> file.
+     * If the package is not found on the server the goal execution will continue but a warning will be logged.
+     */
+    @Parameter(property = "deployplugin.packagename", required = false)
+    private String o11nPackageName;
 
-    // Static globals
     private static File file = null;
-    private static enum ServiceStatus
+    private enum ServiceStatus
     {
         RUNNING, STOPPED, RESTARTING, UNDEFINED;
     }
@@ -161,10 +180,10 @@ public class DeployPlugin extends AbstractMojo
         {
             o11nPluginFileName = build.getFinalName();
         }
-        if (o11nPluginType == null || o11nPluginType.isEmpty())
+        if (o11nPluginType == null)
         {
             // may be dar or vmoapp
-            o11nPluginType = "dar";
+            o11nPluginType = PluginType.DAR;
         }
         if (o11nServicePort == null || o11nServicePort < 1 || o11nServicePort > 65535)
         {
@@ -185,21 +204,45 @@ public class DeployPlugin extends AbstractMojo
                 throw new MojoFailureException("Error: 'o11nRestartService' was set to 'true' but no 'o11nPluginServicePassword' was provided.");
             }
         }
+        if(o11nDeletePackage)
+        {
+            if(o11nPackageName == null || o11nPackageName.isEmpty())
+            {
+                throw new MojoFailureException("Error: 'o11nDeletePackage' was set to 'true' but no 'o11nPackageName' was provided.");
+            }
+        }
 
-        // Example: D:\Workspace\coopto\o11nplugin-coopto\target\o11nplugin-PLUGINNAME-0.1.vmoapp
-        file = new File(o11nPluginFilePath + "\\" + o11nPluginFileName + "." + o11nPluginType);
+        // WIN Example: D:\workspace\pluginname\o11nplugin-pluginname\target\o11nplugin-pluginname-0.1.vmoapp
+        // UNIX Example: /workspace/pluginname/o11nplugin-pluginname/target/o11nplugin-pluginname-0.1.vmoapp
+        file = new File(o11nPluginFilePath + File.separator + o11nPluginFileName + "." + o11nPluginType.toString().toLowerCase());
 
         if (file.exists())
         {
-            // 1. Upload plug-in
+            // 1. Delete old packages
+            if(o11nDeletePackage)
+            {
+                getLog().info("Package deletion was requested.");
+                Boolean deleteSuccessed = deletePackage();
+
+                if(deleteSuccessed)
+                {
+                    getLog().info("Finished plug-in package deletion.");
+                }
+                else
+                {
+                    throw new MojoFailureException("Plug-in package deletion has failed.");
+                }
+            }
+
+            // 2. Upload plug-in
             Boolean uploadSuccessed = uploadPlugin();
             if (uploadSuccessed)
             {
-                getLog().info("Finished Plug-in upload.");
+                getLog().info("Finished plug-in upload.");
 
                 if (o11nRestartService)
                 {
-                    // 2. Restart service
+                    // 3. Restart service
                     getLog().info("Service restart was requested.");
                     Boolean restartTriggered = restartService();
 
@@ -216,14 +259,14 @@ public class DeployPlugin extends AbstractMojo
                             throw new MojoExecutionException("Error while executing 'O11N-DEPLOY-MAVEN-PLUGIN':\n" + sw.getBuffer().toString());
                         }
 
-                        // 3. Wait for service restart
+                        // 4. Wait for service restart
                         int timeout = 12;
                         int counter = 0;
                         while (getServiceStatus() == ServiceStatus.RESTARTING)
                         {
                             if (counter >= timeout)
                             {
-                                getLog().warn("Timeout. vRO service is not responding. Please verify your vRO configuration.");
+                                getLog().warn("Timeout. Orchestrator service is not responding. Please verify your Orchestrator configuration.");
                                 break;
                             }
                             counter++;
@@ -245,23 +288,23 @@ public class DeployPlugin extends AbstractMojo
                         switch (status)
                         {
                         case RUNNING:
-                            getLog().info("Finished vRO service restart.");
+                            getLog().info("Finished Orchestrator service restart.");
                             getLog().info("Successfully updated plug-in in VMware Orchestrator.");
                             break;
                         case STOPPED:
-                            getLog().warn("vRO service could not be started. Please verify your vRO configuration.");
+                            getLog().warn("Orchestrator service could not be started. Please verify your Orchestrator configuration.");
                             break;
                         default:
-                            getLog().warn("vRO service returned a unknown status. Please verify your vRO configuration.");
+                            getLog().warn("Orchestrator service returned a unknown status. Please verify your Orchestrator configuration.");
                             break;
                         }
                     } else
                     {
-                        throw new MojoFailureException("vRO service restart has failed. Please restart vRO service manually for the changes to take effect.");
+                        throw new MojoFailureException("Orchestrator service restart has failed. Please restart Orchestrator service manually for the changes to take effect.");
                     }
                 } else
                 {
-                    getLog().info("vRO service restart was not requested. Please restart vRO service manually for the changes to take effect.");
+                    getLog().info("Orchestrator service restart was not requested. Please restart Orchestrator service manually for the changes to take effect.");
                 }
             } else
             {
@@ -273,6 +316,102 @@ public class DeployPlugin extends AbstractMojo
         }
     }
 
+    // Deletes the plug-in packages / elements.
+    private boolean deletePackage() throws MojoFailureException, MojoExecutionException
+    {
+        // Package name with tailing dot (.) character
+        // Example: com.example.packagename.
+        String packageName = o11nPackageName + ".";
+        
+        // Example: https://localhost:8281
+        URI packageServiceBaseUri = UriBuilder.fromUri("https://" + o11nServer + ":" + o11nServicePort.toString()).build();
+        HttpAuthenticationFeature packageServiceAuth = HttpAuthenticationFeature.basic(o11nPluginServiceUser, o11nPluginServicePassword);
+
+        return deletePackage(packageServiceBaseUri, packageServiceAuth, packageName);
+    }
+    
+    private boolean deletePackage(URI apiEndpoint, HttpAuthenticationFeature auth, String packageName) throws MojoFailureException, MojoExecutionException
+    {
+        getLog().info("Deleting plug-in package '" + packageName + "'...");
+        getLog().debug("Configured package service URL: '" + apiEndpoint.toString() + "'.");
+        
+        Client packageServiceClient = null;
+        Response response = null;
+
+        try
+        {
+            packageServiceClient = getUnsecureClient();
+            packageServiceClient.register(auth);
+
+            try
+            {
+                // Possible delete options:
+                // deletePackage - deletes the package without the content.
+                // deletePackageWithContent - deletes the package along with the content. If other packages share elements with this package, they will be deleted.
+                // deletePackageKeepingShared - deletes the package along with the content. If other packages share elements with this package, the elements will not be removed.
+                // If no option parameter is provided, the default one is used: deletePackage
+                response = packageServiceClient.target(apiEndpoint).path("/vco/api/packages/" + packageName).queryParam("option", "deletePackageKeepingShared").request(MediaType.APPLICATION_JSON_TYPE).delete();
+
+                int statusCode = response.getStatus();
+                switch (statusCode)
+                {
+                case 200:
+                    getLog().debug("HTTP 200. Plug-in package deleted.");
+                    return true;
+                case 204:
+                    getLog().debug("HTTP 204. No plug-in package found for deletion.");
+                    return true;
+                case 401:
+                    getLog().warn("HTTP 401. Authentication is required to delete a plug-in package.");
+                    return false;
+                case 403:
+                    getLog().warn("HTTP 403. The provided user is not authorized to delete a plug-in package.");
+                    return false;
+                case 404:
+                    getLog().warn("HTTP 404. The plug-in package was not found on the server. Skipping plug-in package deletion.");
+                    return true;
+                default:
+                    getLog().warn("Unknown status code HTTP " + statusCode + " returned from VMware Orchestrator. Please verify if the plug-in package has been deleted. I really got no clue.");
+                    return false;
+                }
+            } catch (ResponseProcessingException ex)
+            {
+                // Thrown in case processing of a received HTTP response fails
+                StringWriter sw = new StringWriter();
+                PrintWriter pw = new PrintWriter(sw, true);
+                ex.printStackTrace(pw);
+                throw new MojoFailureException("A ResponseProcessingException occured while requesting plug-in package deletion:\n" + sw.getBuffer().toString());
+            } catch (ProcessingException ex)
+            {
+                // Thrown in case the request processing or subsequent I/O operation fail.
+                StringWriter sw = new StringWriter();
+                PrintWriter pw = new PrintWriter(sw, true);
+                ex.printStackTrace(pw);
+                throw new MojoFailureException("A ProcessingException occured while requesting plug-in package deletion:\n" + sw.getBuffer().toString());
+            } finally
+            {
+                // release resources
+                if (response != null)
+                {
+                    response.close();
+                }
+            }
+        } catch (Exception e)
+        {
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw, true);
+            e.printStackTrace(pw);
+            throw new MojoExecutionException("Unable to create HTTP client. Exception:\n" + sw.getBuffer().toString());
+        } finally
+        {
+            // release resources
+            if (packageServiceClient != null)
+            {
+                packageServiceClient.close();
+            }
+        }
+    }
+    
     // Uploads the plug-in submitted to this Mojo. Returns true if the upload was successfull and false otherwise.
     private boolean uploadPlugin() throws MojoFailureException, MojoExecutionException
     {
@@ -283,11 +422,10 @@ public class DeployPlugin extends AbstractMojo
         return uploadPlugin(pluginServiceBaseUri, pluginServiceAuth, o11nPluginType, String.valueOf(o11nOverwrite), file);
     }
 
-    private boolean uploadPlugin(URI apiEndpoint, HttpAuthenticationFeature auth, String type, String overwrite, File file) throws MojoFailureException, MojoExecutionException
+    private boolean uploadPlugin(URI apiEndpoint, HttpAuthenticationFeature auth, PluginType type, String overwrite, File file) throws MojoFailureException, MojoExecutionException
     {
-        getLog().info("Starting Plug-in upload...");
-        getLog().info("Configured plug-in path: '" + file.getAbsolutePath() + "'.");
-        getLog().info("Configured plug-in service URL: '" + apiEndpoint.toString() + "'.");
+        getLog().info("Starting Plug-in '" + file.getAbsolutePath() + "' upload...");
+        getLog().debug("Configured plug-in service URL: '" + apiEndpoint.toString() + "'.");
 
         Client pluginServiceClient = null;
         FileDataBodyPart fileDataBodyPart = null;
@@ -304,7 +442,7 @@ public class DeployPlugin extends AbstractMojo
                 fileDataBodyPart = new FileDataBodyPart("file", file, MediaType.APPLICATION_OCTET_STREAM_TYPE);
                 formDataMultiPart = new FormDataMultiPart();
                 formDataMultiPart.bodyPart(fileDataBodyPart);
-                formDataMultiPart.field("format", type);
+                formDataMultiPart.field("format", type.toString().toLowerCase());
                 formDataMultiPart.field("overwrite", overwrite);
 
                 response = pluginServiceClient.target(apiEndpoint).path("/vco/api/plugins").request(MediaType.WILDCARD_TYPE).post(Entity.entity(formDataMultiPart, MediaType.MULTIPART_FORM_DATA_TYPE));
@@ -328,13 +466,13 @@ public class DeployPlugin extends AbstractMojo
                     getLog().warn("HTTP 403. The provided user is not authorized to upload a plug-in.");
                     return false;
                 case 404:
-                    getLog().warn("HTTP 404. The requested ressource was not found. Make sure you entered the correct VMware Orchestrator URL and that VMware Orchestrator is reachable under that URL from the machine running this Maven Mojo.");
+                    getLog().warn("HTTP 404. The requested resource was not found. Make sure you entered the correct VMware Orchestrator URL and that VMware Orchestrator is reachable under that URL from the machine running this Maven Mojo.");
                     return false;
                 case 409:
                     getLog().warn("HTTP 409. The provided plug-in already exists and the overwrite flag was not set. The plug-in will not be changed in VMware Orchestrator.");
                     return false;
                 default:
-                    getLog().warn("Unkown status code HTTP '" + statusCode + "' returned from VMware Orchestrator. Please verify if the plug-in has been updated sucessfully. I really got no clue.");
+                    getLog().warn("Unknown status code HTTP '" + statusCode + "' returned from VMware Orchestrator. Please verify if the plug-in has been updated successfully. I really got no clue.");
                     return false;
                 }
             } catch (ResponseProcessingException ex)
@@ -395,7 +533,7 @@ public class DeployPlugin extends AbstractMojo
         }
     }
 
-    // Triggers a vRO service restart. Returns true if execution was successfull and false otherwise.
+    // Triggers a Orchestrator service restart. Returns true if execution was successfull and false otherwise.
     private Boolean restartService() throws MojoFailureException, MojoExecutionException
     {
         // Example: https://localhost:8283
@@ -407,8 +545,8 @@ public class DeployPlugin extends AbstractMojo
 
     private Boolean restartService(URI apiEndpoint, HttpAuthenticationFeature auth) throws MojoFailureException, MojoExecutionException
     {
-        getLog().info("Restarting vRO service...");
-        getLog().info("Configured config service URL: '" + apiEndpoint.toString() + "'.");
+        getLog().info("Restarting Orchestrator service...");
+        getLog().debug("Configured config service URL: '" + apiEndpoint.toString() + "'.");
 
         Client configServiceClient = null;
         Response response = null;
@@ -432,20 +570,20 @@ public class DeployPlugin extends AbstractMojo
                     // Don't use JsonObject.getString since the returned currentStatus might be null
                     // Rather use JsonObject.get which will return the value or JsonValue.NULL if it's null
                     // In addition JsonObject.isNull(String key) can be used for testing the retun value
-                    getLog().debug("vRO service status: " + statusResponse.get("currentStatus"));
-                    getLog().debug("Triggered vRO service restart.");
+                    getLog().debug("Orchestrator service status: " + statusResponse.get("currentStatus"));
+                    getLog().debug("Triggered Orchestrator service restart.");
                     return true;
                 case 401:
-                    getLog().warn("HTTP 401. Authentication is required to restart the vRO service.");
+                    getLog().warn("HTTP 401. Authentication is required to restart the Orchestrator service.");
                     return false;
                 case 403:
-                    getLog().warn("HTTP 403. The provided user is not authorized to restart the vRO service.");
+                    getLog().warn("HTTP 403. The provided user is not authorized to restart the Orchestrator service.");
                     return false;
                 case 404:
-                    getLog().warn("HTTP 404. The requested ressource was not found. Make sure you entered the correct VMware Orchestrator URL and that VMware Orchestrator is reachable under that URL from the machine running this Maven Mojo.");
+                    getLog().warn("HTTP 404. The requested resource was not found. Make sure you entered the correct VMware Orchestrator URL and that VMware Orchestrator is reachable under that URL from the machine running this Maven Mojo.");
                     return false;
                 default:
-                    getLog().warn("Unkown status code HTTP " + statusCode + " returned from VMware Orchestrator. Please verify if the service has been restarted. I really got no clue.");
+                    getLog().warn("Unknown status code HTTP " + statusCode + " returned from VMware Orchestrator. Please verify if the Orchestrator service has been restarted. I really got no clue.");
                     return false;
                 }
             } catch (ResponseProcessingException ex)
@@ -454,14 +592,14 @@ public class DeployPlugin extends AbstractMojo
                 StringWriter sw = new StringWriter();
                 PrintWriter pw = new PrintWriter(sw, true);
                 ex.printStackTrace(pw);
-                throw new MojoFailureException("A ResponseProcessingException occured while restarting vRO service:\n" + sw.getBuffer().toString());
+                throw new MojoFailureException("A ResponseProcessingException occured while restarting Orchestrator service:\n" + sw.getBuffer().toString());
             } catch (ProcessingException ex)
             {
                 // Thrown in case the request processing or subsequent I/O operation fail.
                 StringWriter sw = new StringWriter();
                 PrintWriter pw = new PrintWriter(sw, true);
                 ex.printStackTrace(pw);
-                throw new MojoFailureException("A ProcessingException occured while restarting vRO service:\n" + sw.getBuffer().toString());
+                throw new MojoFailureException("A ProcessingException occured while restarting Orchestrator service:\n" + sw.getBuffer().toString());
             } finally
             {
                 // release resources
@@ -486,7 +624,7 @@ public class DeployPlugin extends AbstractMojo
         }
     }
 
-    // Returns the current vRO service status.
+    // Returns the current Orchestrator service status.
     private ServiceStatus getServiceStatus() throws MojoFailureException, MojoExecutionException
     {
         // Example: https://localhost:8283
@@ -498,7 +636,7 @@ public class DeployPlugin extends AbstractMojo
 
     private ServiceStatus getServiceStatus(URI apiEndpoint, HttpAuthenticationFeature auth) throws MojoFailureException, MojoExecutionException
     {
-        getLog().debug("Getting vRO service status...");
+        getLog().debug("Getting Orchestrator service status...");
         getLog().debug("Configured config service URL: '" + apiEndpoint.toString() + "'.");
 
         Client configServiceClient = null;
@@ -523,7 +661,7 @@ public class DeployPlugin extends AbstractMojo
                     // Don't use JsonObject.getString since the returned currentStatus might be null
                     // Rather use JsonObject.get which will return the value or JsonValue.NULL if it's null
                     // In addition JsonObject.isNull(String key) can be used for testing the retun value
-                    getLog().debug("vRO service status: " + statusResponse.get("currentStatus"));
+                    getLog().debug("Orchestrator service status: " + statusResponse.get("currentStatus"));
 
                     // Status should be "RUNNING", "STOPPED", "UNDEFINED" or NULL
                     if (statusResponse.isNull("currentStatus"))
@@ -546,10 +684,10 @@ public class DeployPlugin extends AbstractMojo
                     getLog().warn("HTTP 403. The provided user is not authorized to get the service status.");
                     return ServiceStatus.UNDEFINED;
                 case 404:
-                    getLog().warn("HTTP 404. The requested ressource was not found. Make sure you entered the correct VMware Orchestrator URL and that VMware Orchestrator is reachable under that URL from the machine running this Maven Mojo.");
+                    getLog().warn("HTTP 404. The requested resource was not found. Make sure you entered the correct VMware Orchestrator URL and that VMware Orchestrator is reachable under that URL from the machine running this Maven Mojo.");
                     return ServiceStatus.UNDEFINED;
                 default:
-                    getLog().warn("Unkown status code HTTP " + statusCode + " returned from VMware Orchestrator. Please verify if the service has been restarted. I really got no clue.");
+                    getLog().warn("Unknown status code HTTP " + statusCode + " returned from VMware Orchestrator. Please verify if the service has been restarted. I really got no clue.");
                     return ServiceStatus.UNDEFINED;
                 }
             } catch (ResponseProcessingException ex)
@@ -558,14 +696,14 @@ public class DeployPlugin extends AbstractMojo
                 StringWriter sw = new StringWriter();
                 PrintWriter pw = new PrintWriter(sw, true);
                 ex.printStackTrace(pw);
-                throw new MojoFailureException("A ResponseProcessingException occured while requesting vRO service status:\n" + sw.getBuffer().toString());
+                throw new MojoFailureException("A ResponseProcessingException occured while requesting Orchestrator service status:\n" + sw.getBuffer().toString());
             } catch (ProcessingException ex)
             {
                 // Thrown in case the request processing or subsequent I/O operation fail.
                 StringWriter sw = new StringWriter();
                 PrintWriter pw = new PrintWriter(sw, true);
                 ex.printStackTrace(pw);
-                throw new MojoFailureException("A ProcessingException occured while requesting vRO service status:\n" + sw.getBuffer().toString());
+                throw new MojoFailureException("A ProcessingException occured while requesting Orchestrator service status:\n" + sw.getBuffer().toString());
             } finally
             {
                 // release resources
@@ -593,7 +731,7 @@ public class DeployPlugin extends AbstractMojo
     // Returns a Jersey HTTP client properly configured to be used with this Mojo
     private Client getUnsecureClient() throws KeyManagementException, NoSuchAlgorithmException
     {
-        // BEGIN -- Allow Self-Signed vRO-Certificates
+        // BEGIN -- Allow Self-Signed Orchestrator Certificates
         // TODO Build in option to provide the trusted certificate
         SSLContext disabledSslContext = SSLContext.getInstance("TLS");
         disabledSslContext.init(null, new TrustManager[]
@@ -613,7 +751,7 @@ public class DeployPlugin extends AbstractMojo
             }
 
         } }, new java.security.SecureRandom());
-        // END -- Allow Self-Signed vRO-Certificates
+        // END -- Allow Self-Signed Orchestrator Certificates
 
         // BEGIN -- Allow Hostname CN missmatch
         HostnameVerifier disabledHostnameVerification = new HostnameVerifier()

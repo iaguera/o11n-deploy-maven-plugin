@@ -23,7 +23,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.github.m451</groupId>
     <artifactId>o11n-deploy-maven-plugin</artifactId>
-    <version>0.2.0</version>
+    <version>0.2.1</version>
     <packaging>maven-plugin</packaging>
     <name>${project.groupId}:${project.artifactId}</name>
     <description>A Maven plug-in that helps you develop Java plug-ins for VMware vRealize Orchestrator by automatically installing the compiled *.vmoapp or *.dar files on the configured vRealize Orchestrator server.</description>
@@ -292,7 +292,7 @@
             <url>https://repo1.maven.org/maven2/</url>
         </repository>
         <repository>
-            <id>java.net-Public</id>
+            <id>public.java.net</id>
             <name>Maven Java Net Snapshots and Releases</name>
             <url>https://maven.java.net/content/groups/public/</url>
         </repository>
@@ -306,6 +306,10 @@
         <pluginRepository>
             <id>plugins.central.maven.org</id>
             <url>http://repo1.maven.org/maven2</url>
+        </pluginRepository>
+        <pluginRepository>
+            <id>oss.sonatype.org</id>
+            <url>https://oss.sonatype.org/content/repositories/releases/</url>
         </pluginRepository>
     </pluginRepositories>
 </project>

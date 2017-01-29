@@ -8,105 +8,110 @@ A Maven plug-in that helps you develop Java plug-ins for VMware vRealize Orchest
 - Maven debug mode will now provide verbose output
 - Replaced *Unirest* with *Jersey 2.0* and *JSON-P*
 
+#### New in version 0.2.1
+- Added option to delete plug-in packages (thanks @gvart)
+- Minor formatting and spelling fixes
+
 ## Install
 You may download this Mojo as a binary and add it to your local Maven repository for usage. In addition this Mojo is available in the public OSSRH repository hosted by Sonatype and will automatically be pulled from there when added to your project's Maven POM.
 If you have not yet added the Sonatype OSSRH you can do so by adding the following to your POM.
 
 ```xml
 <repositories>
-	<repository>
-		<id>sonatype-oss-public</id>
-		<url>https://oss.sonatype.org/content/groups/public/</url>
-		<releases>
-			<enabled>true</enabled>
-		</releases>
-		<snapshots>
-			<enabled>true</enabled>
-		</snapshots>
-	</repository>
+    <repository>
+        <id>sonatype-oss-public</id>
+        <url>https://oss.sonatype.org/content/groups/public/</url>
+        <releases>
+            <enabled>true</enabled>
+        </releases>
+    </repository>
 </repositories>
 ```
 
-
 ## Usage
-This Mojo should be configured within your *o11nplugin-**pluginname**/pom.xml* Maven module. It has a single goal **deployplugin** and usually you should run it in the **install** phase. The **deployplugin** goal has the following parameters:
+This Mojo should be configured within your *o11nplugin-**pluginname**/pom.xml* Maven module. It has a single goal **deployplugin** and usually you should run it in the **install** phase. The **deployplugin** goal has the following parameters.
 
-- **o11nServer**: VMware Orchestrator server hostname or IP-address. **Required**.
-- **o11nServicePort**: VMware Orchestrator Plugin Service REST API Port. Defaults to *8281*.
-- **o11nConfigPort**: VMware Orchestrator Config Service REST API Port. Defaults to *8283*.
-- **o11nPluginServiceUser**: Username of a user with sufficient permissions to import vRO plug-ins. **Required**. *Note: when using vRO integrated LDAP this will be 'vcoadmin' and 'root' has no permissions to use the plug-in service API by default.*
-- **o11nPluginServicePassword**: Password of the provided *o11nPluginServiceUser*. **Required**.
-- **o11nConfigServiceUser**: Username of a user with sufficient permissions to restart vRO services. **Required if *o11nRestartService* was set to *true***. *Note: when using vRO integrated LDAP this will be 'root' and 'vcoadmin' has no permissions to use the config service API by default.*
-- **o11nConfigServicePassword**: Password of the provided *o11nConfigServiceUser*. **Required if *o11nRestartService* was set to *true***.
-- **o11nOverwrite**: Forces vRO to reinstall the plug-in. Defaults to *true*.
-- **o11nPluginType**: The vRO plug-in format. Might be *dar* or *vmoapp*. Defaults to *dar*.
-- **o11nPluginFilePath**: Path to the plug-in file that should be installed. Defaults to *${project.build.directory}*. The filename will be taken from the configured *o11nPluginFileName*.
-- **o11nPluginFileName**: The plug-in filename of the plug-in that should be installed omitting any file extension. Defaults to *${project.build.finalName}*. The extension will be taken from the configured *o11nPluginType*.
 
-All parameters are provided as Strings and converted into the required format internally. A simple `mvn install` will then trigger the upload of the compiled plugin.
+#### Mandatory Parameters
+- **o11nServer**: VMware Orchestrator server hostname or IP-address.
+- **o11nPluginServiceUser**: Username of a user with sufficient permissions to import Orchestrator plug-ins. *Note: when using integrated LDAP this will be `vcoadmin` and `root` has no permissions to use the plug-in service API by default.*
+- **o11nPluginServicePassword**: Password of the provided `o11nPluginServiceUser`.
 
+#### Optional Parameters
+- **o11nServicePort**: VMware Orchestrator Plugin Service REST API Port. Defaults to `8281`.
+- **o11nConfigPort**: VMware Orchestrator Config Service REST API Port. Defaults to `8283`.
+- **o11nOverwrite**: If set to `true` this option will trigger a Orchestrator service restart after the plug-in was installed. Defaults to `true`.
+- **o11nPluginType**: The Orchestrator plug-in bundle format. Might be `DAR` or `VMOAPP`. Defaults to `VMOAPP`. *Note*: the value for this parameter is case-sensitive!
+- **o11nRestartService**: If set to `true` this option will trigger a Orchestrator service restart after the plug-in was installed.
+- **o11nConfigServiceUser**: Username of a user with sufficient permissions to restart Orchestrator services. **Required if `o11nRestartService` was set to `true`**. *Note: when using integrated LDAP this will be `root` and `vcoadmin` has no permissions to use the config service API by default.*
+- **o11nConfigServicePassword**: Password of the provided `o11nConfigServiceUser`. **Required if `o11nRestartService` was set to `true`**.
+- **o11nDeletePackage**: If set to `true` this option will delete all of the plug-ins packages before installing the new plug-in. *Note*: any changes done to the plug-in workflows and not synced with the packages in the plug-in bundle will be lost! The Orchestrator API option `deletePackageKeepingShared` is used internally for safety.
+- **o11nPackageName**: The package name of the plug-in package to be deleted. **Required if `o11nDeletePackage` was set to `true`**. *Note*: this is the package name as specified in the `pkg-name` attribute of the `dunes-meta-inf.xml` file. If the package is not found on the server the goal execution will continue but a warning will be logged.
+- **o11nPluginFilePath**: Path to the plug-in file that should be installed. Defaults to `${project.build.directory}`. The filename will be taken from the configured *o11nPluginFileName*.
+- **o11nPluginFileName**: The plug-in filename of the plug-in that should be installed omitting any file extension. Defaults to `${project.build.finalName}`. The extension will be taken from the configured *o11nPluginType*.
+
+#### Parameter Formatting
+All parameters are provided as Strings inside your POM file and will be converted into the required format internally. A simple `mvn install` will then trigger the upload of the compiled plugin if the execution goal has been set, see [example configuration](#example-configuration).
 
 ### Example configuration
 A example that uses all currently available parameters. Note that for illustration purpose we also configured the optional parameters which would use the documented default values if omitted.
 
 ```xml
 <plugin>
-	<groupId>com.github.m451</groupId>
-	<artifactId>o11n-deploy-maven-plugin</artifactId>
-	<version>0.2.0</version>
-	<executions>
-		<execution>
-			<phase>install</phase>
-			<goals>
-				<goal>deployplugin</goal>
-			</goals>
-		</execution>
-	</executions>
-	<configuration>
+    <groupId>com.github.m451</groupId>
+    <artifactId>o11n-deploy-maven-plugin</artifactId>
+    <version>0.2.1</version>
+    <executions>
+        <execution>
+            <phase>install</phase>
+            <goals>
+                <goal>deployplugin</goal>
+            </goals>
+        </execution>
+    </executions>
+    <configuration>
       <o11nServer>localhost</o11nServer>
       <o11nServicePort>8281</o11nServicePort>
       <o11nConfigPort>8283</o11nConfigPort>
       <o11nPluginServiceUser>vcoadmin</o11nPluginServiceUser>
       <o11nPluginServicePassword>vcoadmin</o11nPluginServicePassword>
       <o11nConfigServiceUser>root</o11nConfigServiceUser>
-      <o11nConfigServicePassword>YourRootP$$word</o11nConfigServicePassword>
-      <o11nPluginType>vmoapp</o11nPluginType>
+      <o11nConfigServicePassword>RootP$$word</o11nConfigServicePassword>
+      <o11nPluginType>VMOAPP</o11nPluginType>
       <o11nOverwrite>true</o11nOverwrite>
       <o11nRestartService>true</o11nRestartService>
+      <o11nDeletePackage>true</o11nDeletePackage>
+      <o11nPackageName>com.example.packagename</o11nPackageName>
       <o11nPluginFilePath>${project.build.directory}<o11nPluginFilePath>
       <o11nPluginFileName>${project.build.finalName}</o11nPluginFileName>
-	</configuration>
+    </configuration>
 </plugin>
 <!-- Optional, see 'install' section of this readme -->
 <repositories>
-	<repository>
-		<id>sonatype-oss-public</id>
-		<url>https://oss.sonatype.org/content/groups/public/</url>
-		<releases>
-			<enabled>true</enabled>
-		</releases>
-		<snapshots>
-			<enabled>true</enabled>
-		</snapshots>
-	</repository>
+    <repository>
+        <id>sonatype-oss-public</id>
+        <url>https://oss.sonatype.org/content/groups/public/</url>
+        <releases>
+            <enabled>true</enabled>
+        </releases>
+    </repository>
 </repositories>
 ```
 
 
 ### Example execution
- 
- An example output of a successfull run may look like this:
+An example output of a successfull run may look like this:
 ```bash
 ...
-[INFO] --- o11n-deploy-maven-plugin:0.2.0:deployplugin (default) @ o11nplugin-coopto ---
-[INFO] Starting Plug-in upload...
-[INFO] Configured plug-in path: 'D:\workspace\coopto\o11nplugin-coopto\target\o11nplugin-coopto-0.0.3-dev.vmoapp'.
-[INFO] Configured plug-in service URL: 'https://localhost:8281'.
-[INFO] Finished Plug-in upload.
+[INFO] --- o11n-deploy-maven-plugin:0.2.1:deployplugin (default) @ o11nplugin-pluginname ---
+[INFO] Package deletion was requested.
+[INFO] Deleting plug-in package 'com.example.packagename.'...
+[INFO] Finished plug-in package deletion.
+[INFO] Starting Plug-in '/workspace/pluginname/o11nplugin-pluginname/target/o11nplugin-pluginname-0.1.vmoapp' upload...
+[INFO] Finished plug-in upload.
 [INFO] Service restart was requested.
-[INFO] Restarting vRO service...
-[INFO] Configured config service URL: 'https://localhost:8283'.
-[INFO] Finished vRO service restart.
+[INFO] Restarting Orchestrator service...
+[INFO] Finished Orchestrator service restart.
 [INFO] Successfully updated plug-in in VMware Orchestrator.
 ...
 ```
