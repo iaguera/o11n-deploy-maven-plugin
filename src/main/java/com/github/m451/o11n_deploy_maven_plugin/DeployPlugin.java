@@ -134,12 +134,12 @@ public class DeployPlugin extends AbstractMojo
     @Parameter(defaultValue = "DAR", property = "deployplugin.plugintype", required = false)
     /**
      * The Orchestrator plug-in bundle format. Might be <tt>DAR</tt> or <tt>VMOAPP</tt>.
+     * <b>Note</b>: the value for this parameter is case-sensitive!
      */
     private PluginType o11nPluginType;
     @Parameter(defaultValue = "true", property = "deployplugin.overwrite", required = false)
     /**
      * If set to <code>true</code> this option will force Orchestrator to reinstall the plug-in.
-     * <b>Note</b>: the value for this parameter is case-sensitive!
      */
     private boolean o11nOverwrite;
     @Parameter(defaultValue = "false", property = "deployplugin.restart", required = false)
